@@ -24,16 +24,8 @@ document.addEventListener('DOMContentLoaded', () => {
         if (emptyImage) emptyImage.style.display = hasTasks ? 'none' : 'block';
     };
 
-    const saveTasks = () => {
-        const tasks = [];
-        taskList.querySelectorAll('li').forEach(li => {
-            tasks.push({
-                text: li.querySelector('span').textContent,
-                completed: li.classList.contains('completed')
-            });
-        });
-        localStorage.setItem('nimbus_tasks', JSON.stringify(tasks));
-    };
+    // --- Server-backed persistence (CRUD) ---
+    let editingId = null;
 
     const updateProgress = () => {
         const totalTasks = taskList.children.length;
@@ -46,9 +38,8 @@ document.addEventListener('DOMContentLoaded', () => {
         if (totalTasks > 0 && completedTasks === totalTasks) {
             fireConfetti();
         } else {
-            stopConfetti(); 
+            stopConfetti();
         }
-        saveTasks(); 
     };
 
     const fireConfetti = () => {
@@ -75,38 +66,36 @@ document.addEventListener('DOMContentLoaded', () => {
         }, 250);
     };
 
-    // --- EVENT LISTENERS ---
-
-    // FIXED: Added missing closing braces below
-   if (resetBtn) { resetBtn.addEventListener('click', () => {
+    // RESET BUTTON
+    if (resetBtn) { resetBtn.addEventListener('click', async () => {
         if (confirm("Are you sure you want to reset all tasks and progress?")) {
-            // 1. Clear the visual list
+            try {
+                // Delete all tasks on server (simple approach)
+                const tasks = await fetch('/tasks');
+                const list = await tasks.json();
+                await Promise.all(list.map(t => fetch(`/tasks/${t.id}`, { method: 'DELETE' })));
+            } catch (err) {
+                console.error('Reset failed', err);
+            }
+
+            // Clear UI
             taskList.innerHTML = '';
-            
-            // 2. Clear the input field
             taskInput.value = '';
-            
-            // 3. Delete from permanent storage
-            localStorage.removeItem('nimbus_tasks');
-            
-            // 4. Reset UI States
-            stopConfetti();      // Stop any active celebrations
-            updateProgress();    // This will reset the progress bar and "0/0" text
-            toggleEmptyState();  // This will show your 'check.png' image again
+            stopConfetti();
+            updateProgress();
+            toggleEmptyState();
         }
     });
-}
+    }
 
-    const addTask = (text, completed = false) => {
-        const taskText = text || taskInput.value.trim();
-        if (!taskText) return;
-
-        stopConfetti();
+    // Create a task DOM element and bind server-syncing handlers
+    const createTaskDom = (task) => {
         const li = document.createElement('li');
-        if (completed) li.classList.add('completed');
+        li.dataset.id = task.id;
+        if (task.completed) li.classList.add('completed');
 
         li.innerHTML = `
-            <input type="checkbox" class="checkbox" ${completed ? 'checked' : ''}>
+            <input type="checkbox" class="checkbox" ${task.completed ? 'checked' : ''}>
             <span></span>
             <div class="task-buttons">
                 <button class="edit-btn"><i class="fa-solid fa-pen"></i></button>
@@ -114,62 +103,145 @@ document.addEventListener('DOMContentLoaded', () => {
             </div>
         `;
 
-        li.querySelector('span').textContent = taskText;
+        li.querySelector('span').textContent = task.text;
 
         const checkbox = li.querySelector('.checkbox');
         const editBtn = li.querySelector('.edit-btn');
         const deleteBtn = li.querySelector('.delete-btn');
 
-        // Toggle edit button style based on completion
         const updateEditStyle = (isComplete) => {
             editBtn.disabled = isComplete;
             editBtn.style.opacity = isComplete ? '0.5' : '1';
             editBtn.style.pointerEvents = isComplete ? 'none' : 'auto';
         };
 
-        updateEditStyle(completed);
+        updateEditStyle(task.completed);
 
-        checkbox.addEventListener('change', () => {
-            li.classList.toggle('completed', checkbox.checked);
-            updateEditStyle(checkbox.checked);
-            updateProgress(); 
+        checkbox.addEventListener('change', async () => {
+            const completed = checkbox.checked;
+            try {
+                await fetch(`/tasks/${li.dataset.id}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ completed, text: li.querySelector('span').textContent })
+                });
+                li.classList.toggle('completed', completed);
+                updateEditStyle(completed);
+                updateProgress();
+            } catch (err) {
+                console.error('Failed updating task', err);
+            }
         });
 
         editBtn.addEventListener('click', () => {
+            const id = li.dataset.id;
+            if (!id) {
+                console.error('Edit attempted with no id on element');
+                return;
+            }
             taskInput.value = li.querySelector('span').textContent;
-            li.remove();
-            updateProgress();
+            editingId = id;
             taskInput.focus();
         });
 
-        deleteBtn.addEventListener('click', () => {
-            li.remove();
-            toggleEmptyState();
-            updateProgress();
+        deleteBtn.addEventListener('click', async () => {
+            try {
+                const id = li.dataset.id;
+                if (!id) {
+                    console.error('Delete attempted with no id on element, removing locally');
+                    // remove locally to avoid stuck UI; but don't call server with undefined
+                    li.remove();
+                    toggleEmptyState();
+                    updateProgress();
+                    return;
+                }
+
+                console.log('Deleting task id=', id);
+                const res = await fetch(`/tasks/${id}`, { method: 'DELETE' });
+                if (!res.ok) {
+                    console.error('Server responded with', res.status);
+                }
+                li.remove();
+                toggleEmptyState();
+                updateProgress();
+            } catch (err) {
+                console.error('Failed to delete task', err);
+            }
         });
 
         taskList.appendChild(li);
-        taskInput.value = '';
-        toggleEmptyState();
-        updateProgress();
     };
 
-    const loadTasks = () => {
-        const savedTasks = JSON.parse(localStorage.getItem('nimbus_tasks')) || [];
-        savedTasks.forEach(task => addTask(task.text, task.completed));
+    // Load tasks from server
+    const loadTasks = async () => {
+        try {
+            const res = await fetch('/tasks');
+            const tasks = await res.json();
+            taskList.innerHTML = '';
+            tasks.forEach(createTaskDom);
+            toggleEmptyState();
+            updateProgress();
+        } catch (err) {
+            console.error('Failed to load tasks', err);
+        }
+    };
+
+    // Add or edit task via server
+    const submitTask = async () => {
+        const taskText = taskInput.value.trim();
+        if (!taskText) return;
+
+        stopConfetti();
+
+        try {
+            if (editingId) {
+                // Update existing
+                const li = taskList.querySelector(`li[data-id="${editingId}"]`);
+                const completed = li ? li.classList.contains('completed') : false;
+                const res = await fetch(`/tasks/${editingId}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ text: taskText, completed })
+                });
+                const updated = await res.json();
+                // replace dom
+                if (li) li.remove();
+                createTaskDom(updated);
+                editingId = null;
+            } else {
+                // Create new
+                const res = await fetch('/tasks', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ text: taskText })
+                });
+                const created = await res.json();
+                if (!created || !created.id) {
+                    console.warn('Server did not return an id for created task', created);
+                }
+                createTaskDom(created);
+            }
+
+            taskInput.value = '';
+            toggleEmptyState();
+            updateProgress();
+        } catch (err) {
+            console.error('Failed to submit task', err);
+        }
     };
 
     addTaskBtn.addEventListener('click', (e) => {
         e.preventDefault();
-        addTask();
+        submitTask();
     });
 
     taskInput.addEventListener('keypress', (e) => {
         if (e.key === 'Enter') {
             e.preventDefault();
-            addTask();
+            submitTask();
         }
     });
 
+    // Initial load
     loadTasks();
 });
