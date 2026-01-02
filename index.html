@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>NIMBUS</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/7.0.1/css/all.min.css" integrity="sha512-2SwdPD6INVrV/lHTZbO2nodKhrnDdJK9/kg2XD1r9uGqPo1cUbujc+IYdlYdEErWNu69gVcYgdxlmVmzTWnetw==" crossorigin="anonymous" referrerpolicy="no-referrer" />
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <div class="nimbus-app">
+            <h1>NIMBUS TASK</h1>
+            <div class="stat-container">
+                <div class="details">
+                    <h3>Keep it up!</h3>
+                    <div id="progressbar">
+                        <div id="progress"></div>
+                    </div>
+                </div>
+                <div class="stats-number">
+                    <p id="numbers">0/0</p>
+                </div>
+            </div> 
+            <form class="input-area">
+                <input type="text" id="task-input" placeholder="add your tasks...">
+                <button type="submit" id="add-task-btn"><i class="fa-solid fa-plus"></i></button>
+            </form>
+            <div class="nimbus-container">
+                <ul id="task-list"> </ul>
+                <img class="empty-img" scr="check.svg" alt="empty">
+            </div>
+        </div>
+
+    </div>
+
+
+    
+
+</body>
+<script src="script.js"></script>
+</html>
